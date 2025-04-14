@@ -179,7 +179,7 @@ function file_selected(){
 //peer js
 const peer = new Peer();
 let conn;
-
+var AESFINALKEY;
 //********display chat**************
 function appendMessage(msg, isOwn = false) {
     const chatBox = document.getElementById('chatBox');
@@ -216,7 +216,6 @@ function sendMessage(msg="none",display=null){
     }
 }
 
-
 function connect(){
     conn_id=document.getElementById('connectId').value;
     conn=peer.connect(conn_id);
@@ -237,9 +236,10 @@ function connect(){
     conn.on('data',(data) =>{
         console.log("aes: ",AESkeyExchangeFlag);
         if(AESkeyExchangeFlag == true){
-            console.log("goddammitt",data);
+            console.log("unencrypted aes key",data);
             decryptWithPrivateKey(ourprivateKey,data).then((decryptedData)=>{
-                console.log(decryptedData);
+                AESFINALKEY=decryptedData;
+                console.log("recieved aes key: ",AESFINALKEY);
             })
             AESkeyExchangeFlag=false;
         }else if(file_details_flag == true){
@@ -278,6 +278,7 @@ peer.on('connection',function(Incomingconn){
     let file_flag=false,file_details_flag=false,keyExchangeFlag=true,AESkeyExchangeFlag=false;
     const chunks=[];
     var recievedPublicKey;
+    //var AESFINALKEY;
     conn.on('data',(data)=>{
         console.log("aes: ",AESkeyExchangeFlag);
         if(keyExchangeFlag == true){
@@ -285,12 +286,13 @@ peer.on('connection',function(Incomingconn){
             importPublicKeyFromBase64(b64publicKey).then((pkey) => {
                 recievedPublicKey = pkey;
                 console.log("recieved a public key: ",recievedPublicKey);
-                //E2EE().then((keyData)=>{
-                //    sendMessage(keyData.publickey);
-                //})
-                encryptWithPublicKey(recievedPublicKey,"helloo").then((encryptedData)=>{
-                    sendMessage(encryptedData);
-                })
+                generateAESKey().then((AESkey)=>{
+                    AESFINALKEY=AESkey;
+                    console.log("sended aes key",AESFINALKEY);
+                    encryptWithPublicKey(recievedPublicKey,AESkey).then((encryptedData)=>{
+                        sendMessage(encryptedData);
+                    })
+                }) 
             });
             keyExchangeFlag=false;
             AESkeyExchangeFlag=true; 
