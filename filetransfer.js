@@ -109,10 +109,9 @@ function getEncryptionOptions() {
     return `
     <label for="encryption">Encryption:</label>
     <select id="encryption">
-        <option value="aes">AES</option>
-        <option value="rsa">RSA</option>
-        <option value="rsa">RANDOM XOR cipher</option>
-        <option value="rsa">RANDOM Ceaser cipher</option>
+        <option value="aes">AES + RSA (E2EE)</option>
+        <option value="xor">RANDOM XOR cipher</option>
+        <option value="ceaser">RANDOM Ceaser cipher</option>
     </select>
     `;
 }
@@ -290,10 +289,11 @@ async function base64ToBlob(base64, mimeType = "") {
 async function fileSelected() {
     const file = document.getElementById("real-file").files[0];
     const reader = new FileReader();
-
+    const encryption_choosen=document.getElementById("encryption").value;
     let fileBluePrint = {
         name: file.name,
         extension: file.type,
+        encryption:encryption_choosen
     };
     const fileBluePrintJSON = JSON.stringify(fileBluePrint);
 
@@ -306,24 +306,41 @@ async function fileSelected() {
         while (offset < blob.size){
             let sliced_chunk = blob.slice(offset,offset+chunk_size);
             const sliced_chunkB64 =await blobToBase64(sliced_chunk);
-            const {ciphertext,iv} = await encryptWithAES(AESkey,sliced_chunkB64);
-            let file_chunkJSON = {
-                data:ciphertext,
-                iv:iv
-            };
-            Queue.push(JSON.stringify(file_chunkJSON));
+            if(encryption_choosen == "aes"){
+                console.log("aes");
+                const {ciphertext,iv} = await encryptWithAES(AESkey,sliced_chunkB64);
+                let file_chunkJSON = {
+                    data:ciphertext,
+                    iv:iv
+                };
+                Queue.push(JSON.stringify(file_chunkJSON));
+            }else if(encryption_choosen == "xor"){
+                const {ciphertext,iv} = await encryptWithAES(AESkey,sliced_chunkB64);
+                let file_chunkJSON = {
+                    data:ciphertext,
+                    iv:iv
+                };
+                Queue.push(JSON.stringify(file_chunkJSON));
+            }else if(encryption_choosen == "ceaser"){
+                const {ciphertext,iv} = await encryptWithAES(AESkey,sliced_chunkB64);
+                let file_chunkJSON = {
+                    data:ciphertext,
+                    iv:iv
+                };
+                Queue.push(JSON.stringify(file_chunkJSON));
+            }
             if (offset + chunk_size >= blob.size) {
                 Queue.push("EOF");
                 Queue.push(fileBluePrintJSON);
+                sendData(Queue[0]);
             }
             offset += chunk_size;
         }
-        sendData(Queue[0]);
     }
     reader.readAsArrayBuffer(file);
 }
 
-async function getDataBlob(file_chunks,fileDetails){
+async function getDataBlobAES(file_chunks,fileDetails){
     let decryptedDataList = [];
     for(let JSONencodedfilechunk of file_chunks){
         let encJSON = JSON.parse(JSONencodedfilechunk);
@@ -334,6 +351,15 @@ async function getDataBlob(file_chunks,fileDetails){
     return new Blob(decryptedDataList,{type:fileDetails.extension});
 }
 
+async function getDataBlobRSA(file_chunks,fileDetails){
+    let decryptedDataList = [];
+    for(let blob_part of file_chunks){
+        const arrayBuffer = await decryptWithPrivateKey(recieverPrivateKey,blob_part);
+        const blob = base64ToBlob(blob,'');
+        console.log(blob)
+    }
+    //return new Blob(decryptedDataList,{type:fileDetails.extension});
+}
 
 let conn;
 
@@ -341,7 +367,6 @@ function connect(){
     const peerId = document.getElementById('peer_id').value;
     conn = peer.connect(`LrnGQMV4xC9Bz87rP4N4K8k8ma${peerId}`)
     conn.on('open',()=>{
-        //when connection opens generates RSA key and send peer id
         generateRSAKeys().then((keyPair)=>{
             exportPublicKey(keyPair.publicKey).then((base64publicKey)=>{
                 const new_data={
@@ -365,19 +390,35 @@ function connect(){
     conn.on('data',(data) =>{
         if(file_blueprint_flag == true){
             let fileDetails = JSON.parse(data);
-            getDataBlob(file_chunks,fileDetails).then((blob)=>{
-                const url = URL.createObjectURL(blob);
-                const atag = document.createElement("a");
-                atag.href = url;
-                atag.textContent = fileDetails.name;
-                atag.download = fileDetails.name;
-                atag.className = "file-link";
-                atag.target = "_blank"; 
-                document.getElementById("content").appendChild(atag);
-                filechunks.length=0;
-                file_blueprint_flag=false;
-                conn.send("ACK");
-            })
+            if(fileDetails.encryption == "aes"){
+                getDataBlobAES(file_chunks,fileDetails).then((blob)=>{
+                    const url = URL.createObjectURL(blob);
+                    const atag = document.createElement("a");
+                    atag.href = url;
+                    atag.textContent = fileDetails.name;
+                    atag.download = fileDetails.name;
+                    atag.className = "file-link";
+                    atag.target = "_blank"; 
+                    document.getElementById("content").appendChild(atag);
+                    filechunks.length=0;
+                    file_blueprint_flag=false;
+                    conn.send("ACK");
+                })
+            }else if(fileDetails.encryption == "rsa"){
+                getDataBlobRSA(file_chunks,fileDetails).then((blob)=>{
+                    const url = URL.createObjectURL(blob);
+                    const atag = document.createElement("a");
+                    atag.href = url;
+                    atag.textContent = fileDetails.name;
+                    atag.download = fileDetails.name;
+                    atag.className = "file-link";
+                    atag.target = "_blank"; 
+                    document.getElementById("content").appendChild(atag);
+                    filechunks.length=0;
+                    file_blueprint_flag=false;
+                    conn.send("ACK");
+                })
+            }
         }else if(data == "EOF"){
             file_blueprint_flag=true;
             file_incoming=false;
@@ -389,6 +430,8 @@ function connect(){
             file_chunks.push(data);
             conn.send("ACK");
         }else{
+            document.getElementById("send").style.display = "none";
+            document.getElementById("recieve").style.display = "none";
             decryptWithPrivateKey(recieverPrivateKey,data).then((decryptedData)=>{
                 importAESKeyFromBase64(decryptedData).then((rawAESKEY)=>{
                     AESkey =rawAESKEY;
@@ -412,8 +455,10 @@ peer.on('connection',function(Incomingconn){
     })
     conn.on('data',(data)=>{
         if(RESexchange == true){
+            document.getElementById("recieve").style.display = "none";
+            document.getElementById("send").style.display = "none";
             let keyData = JSON.parse(data);
-            connected_by_id = keyData.sender_id;
+            connected_by_id = keyData.senderid;
             importPublicKeyFromBase64(keyData.publicKey).then((decryptedpublicKey)=>{
                 publicKeyRecieved = decryptedpublicKey;
                 generateAESKey().then((newAESkey)=>{
