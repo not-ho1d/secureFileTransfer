@@ -72,16 +72,22 @@ async function decryptWithPrivateKey(privateKey, encryptedData) {
     return decodedData;
 }
 function base64ToArrayBuffer(base64) {
-    const binaryString = atob(base64);
-    const length = binaryString.length;
-    const bytes = new Uint8Array(length);
+    try {
+        const binaryString = atob(base64);
+        const length = binaryString.length;
+        const bytes = new Uint8Array(length);
 
-    for (let i = 0; i < length; i++) {
-        bytes[i] = binaryString.charCodeAt(i);
+        for (let i = 0; i < length; i++) {
+            bytes[i] = binaryString.charCodeAt(i);
+        }
+
+        return bytes.buffer;
+    } catch (e) {
+        console.error("Invalid base64 input:", base64);
+        throw new Error("Failed to decode base64 string");
     }
-
-    return bytes.buffer;
 }
+
 async function importPublicKeyFromBase64(base64) {
     const arrayBuffer = base64ToArrayBuffer(base64);
     const importedKey = await crypto.subtle.importKey(
@@ -166,23 +172,40 @@ function sendData(data){
     }
 }
 //AES
-// Generate AES Key
+// Function to generate a 256-bit AES key (AES-GCM)
 async function generateAESKey() {
-    const key = await crypto.subtle.generateKey(
-    {
-        name: "AES-GCM",
-        length: 256, // 256-bit AES key
-    },
-    true, // Extractable, meaning the key can be exported
-    ["encrypt", "decrypt"] // Key can be used for encryption and decryption
+    return await crypto.subtle.generateKey(
+        {
+            name: "AES-GCM",
+            length: 256, // AES-256
+        },
+        true, // extractable
+        ["encrypt", "decrypt"] // Use key for encrypt and decrypt
     );
-    return key;
 }
 
-// Encrypt message with AES key
+// Function to export AES key to Base64
+async function exportAESKeyToBase64(key) {
+    const rawKey = await crypto.subtle.exportKey("raw", key);
+    return arrayBufferToBase64(rawKey);
+}
+
+// Function to import AES key from Base64
+async function importAESKeyFromBase64(base64Key) {
+    const rawKey = decodeBase64ToArrayBuffer(base64Key);
+    return await crypto.subtle.importKey(
+        "raw",
+        rawKey,
+        { name: "AES-GCM" },
+        true,
+        ["encrypt", "decrypt"]
+    );
+}
+
+// AES Encryption (returns ciphertext and IV as Base64 strings)
 async function encryptWithAES(key, message) {
-    const encodedMessage = new TextEncoder().encode(message); // Convert string to ArrayBuffer
-    const iv = crypto.getRandomValues(new Uint8Array(12)); // Initialization vector for AES-GCM
+    const encodedMessage = new TextEncoder().encode(message);
+    const iv = crypto.getRandomValues(new Uint8Array(12)); // 96-bit IV for AES-GCM
 
     const encryptedData = await crypto.subtle.encrypt(
         {
@@ -194,85 +217,75 @@ async function encryptWithAES(key, message) {
     );
 
     return {
-        AESencryptedData: encryptedData,
-        iv: iv
+        ciphertext: arrayBufferToBase64(encryptedData),
+        iv: arrayBufferToBase64(iv.buffer),
     };
 }
 
+// AES Decryption (using Base64 encoded ciphertext and IV)
+async function decryptWithAES(key, base64Ciphertext, base64IV) {
+    const encryptedData = decodeBase64ToArrayBuffer(base64Ciphertext);
+    const iv = new Uint8Array(decodeBase64ToArrayBuffer(base64IV));
 
-// Decrypt message with AES key
-async function decryptWithAES(key, encryptedData, iv) {
-        const decryptedData = await crypto.subtle.decrypt(
-        {
-            name: "AES-GCM",
-            iv: iv, // Initialization vector
-        },
-        key, // The AES key to decrypt with
-        encryptedData // The data to decrypt
+    const decryptedData = await crypto.subtle.decrypt(
+        { name: "AES-GCM", iv },
+        key,
+        encryptedData
     );
 
-    //const decoder = new TextDecoder();
-    //const decryptedMessage = decoder.decode(decryptedData);
-    //return decryptedMessage;
-    return decryptedData
+    return new TextDecoder().decode(decryptedData);
 }
-async function aesKeyToBase64(key) {
-    const rawKey = await crypto.subtle.exportKey("raw", key); // ArrayBuffer
-    const base64Key = btoa(String.fromCharCode(...new Uint8Array(rawKey)));
-    return base64Key;
-  }
-async function base64ToAESKey(base64Key) {
-    const binary = atob(base64Key); // Decode base64 to binary string
+
+// Utility to convert ArrayBuffer to Base64 (for network transfer)
+function arrayBufferToBase64(buffer) {
+    const bytes = new Uint8Array(buffer);
+    const binary = bytes.reduce((acc, byte) => acc + String.fromCharCode(byte), "");
+    return btoa(binary);
+}
+
+// Utility to convert Base64 back to ArrayBuffer
+function decodeBase64ToArrayBuffer(base64) {
+    const binary = atob(base64);
     const bytes = new Uint8Array(binary.length);
     for (let i = 0; i < binary.length; i++) {
-      bytes[i] = binary.charCodeAt(i);
+        bytes[i] = binary.charCodeAt(i);
+    }
+    return bytes.buffer;
+}
+
+async function blobToBase64(blob) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+  
+      reader.onloadend = () => {
+        resolve(reader.result.split(',')[1]); // removes "data:*/*;base64,"
+      };
+  
+      reader.onerror = reject;
+  
+      reader.readAsDataURL(blob); // reads blob as base64 data URL
+    });
+  }
+
+async function base64ToBlob(base64, mimeType = "") {
+    const byteCharacters = atob(base64);
+    const byteArrays = [];
+  
+    for (let i = 0; i < byteCharacters.length; i += 512) {
+      const chunk = byteCharacters.slice(i, i + 512);
+      const byteNumbers = new Array(chunk.length);
+  
+      for (let j = 0; j < chunk.length; j++) {
+        byteNumbers[j] = chunk.charCodeAt(j);
+      }
+  
+      const byteArray = new Uint8Array(byteNumbers);
+      byteArrays.push(byteArray);
     }
   
-    const key = await crypto.subtle.importKey(
-      "raw",
-      bytes.buffer,
-      { name: "AES-GCM" }, // or "AES-CBC" depending on what you're using
-      true,
-      ["encrypt", "decrypt"]
-    );
-    
-    return key;
+    return new Blob(byteArrays, { type: mimeType });
 }
-function areKeysEqual(key1, key2) {
-    if (key1.length !== key2.length) return false;
-    for (let i = 0; i < key1.length; i++) {
-        if (key1[i] !== key2[i]) return false;
-    }
-    return true;
-}
-
-async function decryptFileChunks(file_chunks) {
-    let decryptedFileChunks = [];
-    
-    /*for(let i = 0;i<file_chunks.length;i+=2){
-        let data = file_chunks[i];
-        let iv = file_chunks[i+1];
-        let real_iv = new Uint8Array(iv);
-        let real_data = new Uint8Array(data);
-        console.log("key",AESkey,"\nreal iv",iv,"\nreal data",real_data);
-        const decryptedData = await decryptWithAES(AESkey,real_data,real_iv);
-        console.log("decrypted data",decryptedData);
-        decryptedFileChunks.push(decryptedData);
-    }*/
-    
-    for(let i = 0;i<file_chunks.length;i+=2){
-        decryptedFileChunks.push(file_chunks[i]);
-    }
-    /*console.log("ret:",decryptedFileChunks)
-    const test_blob = new Blob(decryptedFileChunks);
-    const downloadLink = document.createElement("a");
-    downloadLink.href = URL.createObjectURL(test_blob);
-    downloadLink.download = "received_file";
-    downloadLink.click();
-    console.log("test blob",test_blob);*/
-    return decryptedFileChunks;
-}
-
+  
 
 async function fileSelected() {
     const file = document.getElementById("real-file").files[0];
@@ -289,29 +302,38 @@ async function fileSelected() {
         Queue.push("SOF");
         const chunk_size = 16 * 1024; 
         let offset = 0;
-        console.log("init size ",blob.size);
-        let ind=0;
 
-        while (offset < blob.size) {
-            const sliced_chunk = blob.slice(offset, offset + chunk_size);
-            const {AESencryptedData,iv} = await encryptWithAES(AESkey,sliced_chunk);
-            const encryptedAESdata = new Uint8Array(AESencryptedData)
-            const encryptedIv = new Uint8Array(iv)
-            console.log("encrypted data:",AESencryptedData,"key",AESkey,"iv",iv);
-            Queue.push(sliced_chunk);
-            Queue.push(encryptedIv);
+        while (offset < blob.size){
+            let sliced_chunk = blob.slice(offset,offset+chunk_size);
+            const sliced_chunkB64 =await blobToBase64(sliced_chunk);
+            const {ciphertext,iv} = await encryptWithAES(AESkey,sliced_chunkB64);
+            let file_chunkJSON = {
+                data:ciphertext,
+                iv:iv
+            };
+            Queue.push(JSON.stringify(file_chunkJSON));
             if (offset + chunk_size >= blob.size) {
                 Queue.push("EOF");
                 Queue.push(fileBluePrintJSON);
             }
             offset += chunk_size;
-            ind+=1;
         }
         sendData(Queue[0]);
-        console.log("real queue",Queue)
     }
     reader.readAsArrayBuffer(file);
 }
+
+async function getDataBlob(file_chunks,fileDetails){
+    let decryptedDataList = [];
+    for(let JSONencodedfilechunk of file_chunks){
+        let encJSON = JSON.parse(JSONencodedfilechunk);
+        const decryptedData = await decryptWithAES(AESkey,encJSON.data,encJSON.iv);
+        const decryptedDataBlob =await base64ToBlob(decryptedData,'');
+        decryptedDataList.push(decryptedDataBlob);
+    }
+    return new Blob(decryptedDataList,{type:fileDetails.extension});
+}
+
 
 let conn;
 
@@ -319,13 +341,7 @@ function connect(){
     const peerId = document.getElementById('peer_id').value;
     conn = peer.connect(`LrnGQMV4xC9Bz87rP4N4K8k8ma${peerId}`)
     conn.on('open',()=>{
-        console.log("connection success 1");
-        document.getElementById("enter_recieverid").textContent = `connected to ${peerId}`;
-        document.getElementById("content").innerHTML = `
-            <p>connected to ${peerId}</p>
-            <p>waiting for files....</p>
-        `;
-        //newchange
+        //when connection opens generates RSA key and send peer id
         generateRSAKeys().then((keyPair)=>{
             exportPublicKey(keyPair.publicKey).then((base64publicKey)=>{
                 const new_data={
@@ -338,76 +354,78 @@ function connect(){
             recieverPublicKey = keyPair.publicKey;
             recieverPrivateKey = keyPair.privateKey;
         })
+        document.getElementById("enter_recieverid").textContent = `connected to ${peerId}`;
+        document.getElementById("content").innerHTML = `
+            <p>connected to ${peerId}</p>
+            <p>waiting for files....</p>
+        `;
     });
-    const file_chunks=[];
-    let file_incoming_flag = false,file_blueprint_flag=false,RSA_flag=true;
+    let file_incoming = false,file_blueprint_flag=false;
+    let filechunks = [];
     conn.on('data',(data) =>{
-        console.log("data: ",data);
         if(file_blueprint_flag == true){
-            let parsedBlueprint = JSON.parse(data);
-            let filename = parsedBlueprint.name;
-            let filetype = parsedBlueprint.extension;
-            console.log("sending to decrypt",file_chunks)
-            decryptFileChunks(file_chunks).then((decryptedFileChunks)=>{
-                const new_blob =new Blob(decryptedFileChunks,{type:filetype});
-                console.log("AES decrypted data: ",new_blob);
-                const url = URL.createObjectURL(new_blob);
+            let fileDetails = JSON.parse(data);
+            getDataBlob(file_chunks,fileDetails).then((blob)=>{
+                const url = URL.createObjectURL(blob);
                 const atag = document.createElement("a");
                 atag.href = url;
-                atag.textContent = filename;
-                atag.download = filename;
+                atag.textContent = fileDetails.name;
+                atag.download = fileDetails.name;
                 atag.className = "file-link";
                 atag.target = "_blank"; 
-                file_chunks.length=0;
-                document.getElementById("content").appendChild(atag)
-                file_blueprint_flag = false;
-            });
+                document.getElementById("content").appendChild(atag);
+                filechunks.length=0;
+                file_blueprint_flag=false;
+                conn.send("ACK");
+            })
         }else if(data == "EOF"){
-            file_incoming_flag = false;
             file_blueprint_flag=true;
-        }else if(file_incoming_flag == true){
-            file_chunks.push(data);
+            file_incoming=false;
+            conn.send("ACK");
         }else if(data == "SOF"){
-            file_incoming_flag =true;
+            file_incoming = true;
+            conn.send("ACK");
+        }else if(file_incoming == true){
+            file_chunks.push(data);
+            conn.send("ACK");
         }else{
             decryptWithPrivateKey(recieverPrivateKey,data).then((decryptedData)=>{
-                base64ToAESKey(decryptedData).then((decryptedAESkey)=>{
-                    console.log("recieved aes: ",decryptedAESkey);
-                    AESkey=decryptedAESkey;
+                importAESKeyFromBase64(decryptedData).then((rawAESKEY)=>{
+                    AESkey =rawAESKEY;
                 })
             })
         }
-        conn.send("ACK");
     })
 }
 peer.on('open',(peer_id)=>{
     console.log("connection open");
 })
-let id_transfer_flag = true,connected_by_id;
+
+
+let RESexchange = true,connected_by_id;
+let file_incoming = false;
+let file_chunks = [];
 peer.on('connection',function(Incomingconn){
     conn=Incomingconn;
     conn.on('open',()=>{
         console.log('connection success 2');
     })
     conn.on('data',(data)=>{
-        if(id_transfer_flag == true){
-            data = JSON.parse(data);
-            //new change
-            connected_by_id=data.senderid;
-            importPublicKeyFromBase64(data.publicKey).then((decryptedpublicKey)=>{
+        if(RESexchange == true){
+            let keyData = JSON.parse(data);
+            connected_by_id = keyData.sender_id;
+            importPublicKeyFromBase64(keyData.publicKey).then((decryptedpublicKey)=>{
                 publicKeyRecieved = decryptedpublicKey;
-            })
-            id_transfer_flag=false;
-            console.log("key transmission complete");
-            generateAESKey().then((newAESkey)=>{
-                AESkey = newAESkey;
-                console.log("AES KEY : ",AESkey);
-                aesKeyToBase64(AESkey).then((base64AESkey)=>{
-                    encryptWithPublicKey(publicKeyRecieved,base64AESkey).then((encryptedData)=>{
-                        conn.send(encryptedData);
+                generateAESKey().then((newAESkey)=>{
+                    AESkey=newAESkey;
+                    exportAESKeyToBase64(AESkey).then((AESkeyB64)=>{
+                        encryptWithPublicKey(publicKeyRecieved,AESkeyB64).then((encryptedAESkey)=>{
+                            conn.send(encryptedAESkey);
+                        })
                     })
                 })
             })
+            RESexchange = false;
         }else if(data == "ACK"){
             Queue.shift();
             if(Queue.length != 0){
