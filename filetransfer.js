@@ -6,6 +6,8 @@ var recieverPublicKey;
 var recieverPrivateKey;
 var publicKeyRecieved;
 var AESkey;
+var XORkey;
+var ceaserKey;
 //RSA 
 function arrayBufferToBase64(buffer) {
     const bytes = new Uint8Array(buffer);
@@ -284,7 +286,49 @@ async function base64ToBlob(base64, mimeType = "") {
   
     return new Blob(byteArrays, { type: mimeType });
 }
-  
+async function xorEncryptBlob(blob, key) {
+    const buffer = await new Response(blob).arrayBuffer();
+    const keyBytes = new TextEncoder().encode(key);
+    const data = new Uint8Array(buffer);
+    const result = new Uint8Array(data.length);
+
+    for (let i = 0; i < data.length; i++) {
+        result[i] = data[i] ^ keyBytes[i % keyBytes.length];
+    }
+
+    return new Blob([result], { type: blob.type }); // Return encrypted blob
+}
+async function xorDecryptBlob(encryptedBlob, key) {
+    return await xorEncryptBlob(encryptedBlob, key); // Just XOR again!
+}
+async function caesarEncryptBlob(blob, shift) {
+    const buffer = await new Response(blob).arrayBuffer();
+    const bytes = new Uint8Array(buffer);
+    const encryptedBytes = bytes.map(byte => {
+        return byte + shift;
+    });
+    return new Blob([encryptedBytes], { type: blob.type });
+}
+async function caesarDecryptBlob(blob, shift) {
+    const buffer = await new Response(blob).arrayBuffer();
+    const bytes = new Uint8Array(buffer);
+
+    const decryptedBytes = bytes.map(byte => {
+        return byte - shift;
+    });
+    return new Blob([decryptedBytes], { type: blob.type });
+}
+function deriveShiftFromBase64(b64) {
+    let sum = 0;
+    for (let i = 0; i < b64.length; i++) {
+        sum += b64.charCodeAt(i);
+    }
+    return sum % 256; // keep it in byte range
+}
+
+
+
+
 
 async function fileSelected() {
     const file = document.getElementById("real-file").files[0];
@@ -307,7 +351,6 @@ async function fileSelected() {
             let sliced_chunk = blob.slice(offset,offset+chunk_size);
             const sliced_chunkB64 =await blobToBase64(sliced_chunk);
             if(encryption_choosen == "aes"){
-                console.log("aes");
                 const {ciphertext,iv} = await encryptWithAES(AESkey,sliced_chunkB64);
                 let file_chunkJSON = {
                     data:ciphertext,
@@ -315,19 +358,11 @@ async function fileSelected() {
                 };
                 Queue.push(JSON.stringify(file_chunkJSON));
             }else if(encryption_choosen == "xor"){
-                const {ciphertext,iv} = await encryptWithAES(AESkey,sliced_chunkB64);
-                let file_chunkJSON = {
-                    data:ciphertext,
-                    iv:iv
-                };
-                Queue.push(JSON.stringify(file_chunkJSON));
+                const encryptedBlob = await xorEncryptBlob(sliced_chunk,XORkey);
+                Queue.push(encryptedBlob);
             }else if(encryption_choosen == "ceaser"){
-                const {ciphertext,iv} = await encryptWithAES(AESkey,sliced_chunkB64);
-                let file_chunkJSON = {
-                    data:ciphertext,
-                    iv:iv
-                };
-                Queue.push(JSON.stringify(file_chunkJSON));
+                const encryptedBlob =await caesarEncryptBlob(sliced_chunk,ceaserKey);
+                Queue.push(encryptedBlob);
             }
             if (offset + chunk_size >= blob.size) {
                 Queue.push("EOF");
@@ -351,16 +386,22 @@ async function getDataBlobAES(file_chunks,fileDetails){
     return new Blob(decryptedDataList,{type:fileDetails.extension});
 }
 
-async function getDataBlobRSA(file_chunks,fileDetails){
+async function getDataBlobXOR(file_chunks,fileDetails){
     let decryptedDataList = [];
     for(let blob_part of file_chunks){
-        const arrayBuffer = await decryptWithPrivateKey(recieverPrivateKey,blob_part);
-        const blob = base64ToBlob(blob,'');
-        console.log(blob)
+        const decryptedData = await xorDecryptBlob(blob_part,XORkey);
+        decryptedDataList.push(decryptedData);
     }
-    //return new Blob(decryptedDataList,{type:fileDetails.extension});
+    return new Blob(decryptedDataList,{type:fileDetails.extension});
 }
-
+async function getDataBlobCeaser(file_chunks,fileDetails){
+    let decryptedDataList = [];
+    for(let blob_part of file_chunks){
+        const decryptedData = await caesarDecryptBlob(blob_part,ceaserKey);
+        decryptedDataList.push(decryptedData);
+    }
+    return new Blob(decryptedDataList,{type:fileDetails.extension});
+}
 let conn;
 
 function connect(){
@@ -400,12 +441,12 @@ function connect(){
                     atag.className = "file-link";
                     atag.target = "_blank"; 
                     document.getElementById("content").appendChild(atag);
-                    filechunks.length=0;
+                    file_chunks.length=0;
                     file_blueprint_flag=false;
                     conn.send("ACK");
                 })
-            }else if(fileDetails.encryption == "rsa"){
-                getDataBlobRSA(file_chunks,fileDetails).then((blob)=>{
+            }else if(fileDetails.encryption == "xor"){
+                getDataBlobXOR(file_chunks,fileDetails).then((blob)=>{
                     const url = URL.createObjectURL(blob);
                     const atag = document.createElement("a");
                     atag.href = url;
@@ -414,7 +455,21 @@ function connect(){
                     atag.className = "file-link";
                     atag.target = "_blank"; 
                     document.getElementById("content").appendChild(atag);
-                    filechunks.length=0;
+                    file_chunks.length=0;
+                    file_blueprint_flag=false;
+                    conn.send("ACK");
+                })
+            }else if(fileDetails.encryption == "ceaser"){
+                getDataBlobCeaser(file_chunks,fileDetails).then((blob)=>{
+                    const url = URL.createObjectURL(blob);
+                    const atag = document.createElement("a");
+                    atag.href = url;
+                    atag.textContent = fileDetails.name;
+                    atag.download = fileDetails.name;
+                    atag.className = "file-link";
+                    atag.target = "_blank"; 
+                    document.getElementById("content").appendChild(atag);
+                    file_chunks.length=0;
                     file_blueprint_flag=false;
                     conn.send("ACK");
                 })
@@ -433,6 +488,8 @@ function connect(){
             document.getElementById("send").style.display = "none";
             document.getElementById("recieve").style.display = "none";
             decryptWithPrivateKey(recieverPrivateKey,data).then((decryptedData)=>{
+                XORkey = decryptedData;
+                ceaserKey = deriveShiftFromBase64(decryptedData);
                 importAESKeyFromBase64(decryptedData).then((rawAESKEY)=>{
                     AESkey =rawAESKEY;
                 })
@@ -464,6 +521,8 @@ peer.on('connection',function(Incomingconn){
                 generateAESKey().then((newAESkey)=>{
                     AESkey=newAESkey;
                     exportAESKeyToBase64(AESkey).then((AESkeyB64)=>{
+                        XORkey = AESkeyB64;
+                        ceaserKey = deriveShiftFromBase64(AESkeyB64);
                         encryptWithPublicKey(publicKeyRecieved,AESkeyB64).then((encryptedAESkey)=>{
                             conn.send(encryptedAESkey);
                         })
