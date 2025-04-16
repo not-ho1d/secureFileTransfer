@@ -103,9 +103,10 @@ function getEncryptionOptions() {
     return `
     <label for="encryption">Encryption:</label>
     <select id="encryption">
-        <option value="none">None</option>
         <option value="aes">AES</option>
         <option value="rsa">RSA</option>
+        <option value="rsa">RANDOM XOR cipher</option>
+        <option value="rsa">RANDOM Ceaser cipher</option>
     </select>
     `;
 }
@@ -154,9 +155,6 @@ function showReceive() {
         <p id="enter_recieverid">Enter sender's ID to connect:</p>
         <input type="text" placeholder="Enter sender ID" id="peer_id">
         <button style="margin-top:10px;" onclick="connect()">Connect</button>
-    </div>
-    <div class="section">
-        ${getEncryptionOptions()}
     </div>
     `;
 }
@@ -213,9 +211,10 @@ async function decryptWithAES(key, encryptedData, iv) {
         encryptedData // The data to decrypt
     );
 
-    const decoder = new TextDecoder();
-    const decryptedMessage = decoder.decode(decryptedData);
-    return decryptedMessage;
+    //const decoder = new TextDecoder();
+    //const decryptedMessage = decoder.decode(decryptedData);
+    //return decryptedMessage;
+    return decryptedData
 }
 async function aesKeyToBase64(key) {
     const rawKey = await crypto.subtle.exportKey("raw", key); // ArrayBuffer
@@ -247,6 +246,34 @@ function areKeysEqual(key1, key2) {
     return true;
 }
 
+async function decryptFileChunks(file_chunks) {
+    let decryptedFileChunks = [];
+    
+    /*for(let i = 0;i<file_chunks.length;i+=2){
+        let data = file_chunks[i];
+        let iv = file_chunks[i+1];
+        let real_iv = new Uint8Array(iv);
+        let real_data = new Uint8Array(data);
+        console.log("key",AESkey,"\nreal iv",iv,"\nreal data",real_data);
+        const decryptedData = await decryptWithAES(AESkey,real_data,real_iv);
+        console.log("decrypted data",decryptedData);
+        decryptedFileChunks.push(decryptedData);
+    }*/
+    
+    for(let i = 0;i<file_chunks.length;i+=2){
+        decryptedFileChunks.push(file_chunks[i]);
+    }
+    /*console.log("ret:",decryptedFileChunks)
+    const test_blob = new Blob(decryptedFileChunks);
+    const downloadLink = document.createElement("a");
+    downloadLink.href = URL.createObjectURL(test_blob);
+    downloadLink.download = "received_file";
+    downloadLink.click();
+    console.log("test blob",test_blob);*/
+    return decryptedFileChunks;
+}
+
+
 async function fileSelected() {
     const file = document.getElementById("real-file").files[0];
     const reader = new FileReader();
@@ -259,40 +286,30 @@ async function fileSelected() {
 
     reader.onload = async function(e) {
         const blob = new Blob([e.target.result]);
-
-        // Initialize queue with SOF (Start of File)
         Queue.push("SOF");
-
-        const chunk_size = 16 * 1024;  // 16KB per chunk
+        const chunk_size = 16 * 1024; 
         let offset = 0;
+        console.log("init size ",blob.size);
+        let ind=0;
 
-        // Process chunks sequentially with async/await
         while (offset < blob.size) {
             const sliced_chunk = blob.slice(offset, offset + chunk_size);
-
-            // Wait for the encryption to complete
-            const { AESencryptedData, iv } = await encryptWithAES(AESkey, sliced_chunk);
-
-            // Push the encrypted data and IV to the queue
-            Queue.push(AESencryptedData);
-            Queue.push(iv);
-            console.log("Queue:", Queue);
-
-            // If this is the last chunk, add EOF and the file blueprint info
+            const {AESencryptedData,iv} = await encryptWithAES(AESkey,sliced_chunk);
+            const encryptedAESdata = new Uint8Array(AESencryptedData)
+            const encryptedIv = new Uint8Array(iv)
+            console.log("encrypted data:",AESencryptedData,"key",AESkey,"iv",iv);
+            Queue.push(sliced_chunk);
+            Queue.push(encryptedIv);
             if (offset + chunk_size >= blob.size) {
                 Queue.push("EOF");
                 Queue.push(fileBluePrintJSON);
-                console.log("Queue with EOF:", Queue);
             }
-
-            // Increment the offset
             offset += chunk_size;
+            ind+=1;
         }
-
-        // Send the data (after all chunks are processed)
-        sendData(Queue);
+        sendData(Queue[0]);
+        console.log("real queue",Queue)
     }
-
     reader.readAsArrayBuffer(file);
 }
 
@@ -330,21 +347,24 @@ function connect(){
             let parsedBlueprint = JSON.parse(data);
             let filename = parsedBlueprint.name;
             let filetype = parsedBlueprint.extension;
-            const new_blob =new Blob(file_chunks,{type:filetype});
-            const url = URL.createObjectURL(new_blob);
-            const atag = document.createElement("a");
-            atag.href = url;
-            atag.textContent = filename;
-            atag.download = filename;
-            atag.className = "file-link";
-            atag.target = "_blank"; 
-            file_chunks.length=0;
-            document.getElementById("content").appendChild(atag)
-            file_blueprint_flag = false;
+            console.log("sending to decrypt",file_chunks)
+            decryptFileChunks(file_chunks).then((decryptedFileChunks)=>{
+                const new_blob =new Blob(decryptedFileChunks,{type:filetype});
+                console.log("AES decrypted data: ",new_blob);
+                const url = URL.createObjectURL(new_blob);
+                const atag = document.createElement("a");
+                atag.href = url;
+                atag.textContent = filename;
+                atag.download = filename;
+                atag.className = "file-link";
+                atag.target = "_blank"; 
+                file_chunks.length=0;
+                document.getElementById("content").appendChild(atag)
+                file_blueprint_flag = false;
+            });
         }else if(data == "EOF"){
             file_incoming_flag = false;
             file_blueprint_flag=true;
-            console.log("files: ",file_chunks);
         }else if(file_incoming_flag == true){
             file_chunks.push(data);
         }else if(data == "SOF"){
