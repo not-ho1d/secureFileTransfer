@@ -8,6 +8,7 @@ var publicKeyRecieved;
 var AESkey;
 var XORkey;
 var ceaserKey;
+var index=0;
 //RSA 
 function arrayBufferToBase64(buffer) {
     const bytes = new Uint8Array(buffer);
@@ -344,7 +345,7 @@ async function fileSelected() {
     reader.onload = async function(e) {
         const blob = new Blob([e.target.result]);
         Queue.push("SOF");
-        const chunk_size = 16 * 1024; 
+        const chunk_size = 64 * 1024; 
         let offset = 0;
 
         while (offset < blob.size){
@@ -367,7 +368,11 @@ async function fileSelected() {
             if (offset + chunk_size >= blob.size) {
                 Queue.push("EOF");
                 Queue.push(fileBluePrintJSON);
-                sendData(Queue[0]);
+                console.log("file sending started");
+                for(let ind of Queue){
+                    console.log("sent :",ind);
+                    conn.send(ind);
+                }
             }
             offset += chunk_size;
         }
@@ -429,10 +434,11 @@ function connect(){
     let file_incoming = false,file_blueprint_flag=false;
     let filechunks = [];
     conn.on('data',(data) =>{
+        console.log(data);
         if(file_blueprint_flag == true){
             let fileDetails = JSON.parse(data);
             if(fileDetails.encryption == "aes"){
-                getDataBlobAES(file_chunks,fileDetails).then((blob)=>{
+                getDataBlobAES(file_chunks,fileDetails).then((blob)=>{                    
                     const url = URL.createObjectURL(blob);
                     const atag = document.createElement("a");
                     atag.href = url;
@@ -483,7 +489,7 @@ function connect(){
             conn.send("ACK");
         }else if(file_incoming == true){
             file_chunks.push(data);
-            conn.send("ACK");
+            //conn.send("ACK");
         }else{
             document.getElementById("send").style.display = "none";
             document.getElementById("recieve").style.display = "none";
@@ -531,10 +537,11 @@ peer.on('connection',function(Incomingconn){
             })
             RESexchange = false;
         }else if(data == "ACK"){
-            Queue.shift();
-            if(Queue.length != 0){
-                conn.send(Queue[0]);
-            }
+            //Queue.shift();
+            //if(Queue.length != 0){
+                //console.log("sent ",index,"/",Queue.length);
+                //conn.send(Queue[0]);
+            //}
         }
         document.getElementById("content").innerHTML=`
             <div class="section" id="sender_id_hide">
