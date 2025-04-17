@@ -369,9 +369,14 @@ async function fileSelected() {
                 Queue.push("EOF");
                 Queue.push(fileBluePrintJSON);
                 console.log("file sending started");
-                for(let ind of Queue){
-                    console.log("sent :",ind);
-                    conn.send(ind);
+                for(let ind=0;ind<Queue.length - 2;ind++){
+                    conn.send(Queue[0]);
+                    Queue.shift();
+                }
+                if(Queue.length == 2){
+                    conn.send(Queue[0]);
+                    conn.send(Queue[1]);
+                    Queue.length = 0;
                 }
             }
             offset += chunk_size;
@@ -434,7 +439,6 @@ function connect(){
     let file_incoming = false,file_blueprint_flag=false;
     let filechunks = [];
     conn.on('data',(data) =>{
-        console.log(data);
         if(file_blueprint_flag == true){
             let fileDetails = JSON.parse(data);
             if(fileDetails.encryption == "aes"){
